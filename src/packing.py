@@ -22,6 +22,7 @@ from .advanced_optimize import (
     create_diamond_pattern, create_spiral_compact,
     find_best_initial_placement, optimize_placement_advanced
 )
+from .optimize import OptimizationConfig
 
 Placement = Tuple[float, float, float]
 Solution = List[Placement]
@@ -32,8 +33,14 @@ class AdvancedPackingSolver:
     State-of-the-art packing solver with multiple optimization phases.
     """
 
-    def __init__(self, config: Optional[AdvancedConfig] = None, seed: int = 42):
-        self.config = config or AdvancedConfig()
+    def __init__(self, config=None, seed: int = 42):
+        # Handle both OptimizationConfig and AdvancedConfig
+        if config is None:
+            self.config = AdvancedConfig()
+        elif isinstance(config, OptimizationConfig):
+            self.config = config.to_advanced_config()
+        else:
+            self.config = config
         self.config.seed = seed
         self.seed = seed
         random.seed(seed)
