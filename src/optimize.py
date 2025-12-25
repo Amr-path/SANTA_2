@@ -38,15 +38,44 @@ class OptimizationConfig:
     adaptive_steps: bool = True
     step_decay: float = 0.995
     seed: int = 42
+    # Control expensive scipy optimizers
+    de_enabled: bool = True
+    basin_enabled: bool = True
+    lbfgsb_enabled: bool = True
+    multi_res_enabled: bool = True
+    angular_sweep_points: int = 72
+
+    @classmethod
+    def fast_mode(cls):
+        """Fast mode - disables all expensive scipy optimizers. ~1-2 min for 200 trees."""
+        return cls(
+            sa_iterations_base=500,
+            translation_step=0.1,
+            rotation_step=30.0,
+            de_enabled=False,
+            basin_enabled=False,
+            lbfgsb_enabled=False,
+            multi_res_enabled=False,
+            angular_sweep_points=12,
+        )
 
     @classmethod
     def quick_mode(cls):
-        """Quick mode for fast testing."""
-        return cls(sa_iterations_base=2000, translation_step=0.08, rotation_step=20.0)
+        """Quick mode - reduced scipy optimizers. ~5-10 min for 200 trees."""
+        return cls(
+            sa_iterations_base=1000,
+            translation_step=0.08,
+            rotation_step=20.0,
+            de_enabled=False,
+            basin_enabled=False,
+            lbfgsb_enabled=True,
+            multi_res_enabled=False,
+            angular_sweep_points=36,
+        )
 
     @classmethod
     def full_mode(cls):
-        """Full mode for best results."""
+        """Full mode for best results. ~30+ min for 200 trees."""
         return cls(sa_iterations_base=10000, sa_temp_final=1e-8, translation_step=0.03, rotation_step=10.0)
 
     def to_advanced_config(self) -> AdvancedConfig:
@@ -64,6 +93,11 @@ class OptimizationConfig:
             prob_rotate=self.prob_rotate,
             prob_swap=self.prob_swap,
             prob_compact=self.prob_compact,
+            de_enabled=self.de_enabled,
+            basin_enabled=self.basin_enabled,
+            lbfgsb_enabled=self.lbfgsb_enabled,
+            multi_res_enabled=self.multi_res_enabled,
+            angular_sweep_points=self.angular_sweep_points,
         )
 
 

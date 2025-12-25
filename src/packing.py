@@ -330,8 +330,9 @@ class AdvancedPackingSolver:
         """
         Solve for all n from 1 to max_n.
         """
+        import sys
         if verbose:
-            print(f"Solving for n=1 to {max_n} with advanced optimization...")
+            print(f"Solving for n=1 to {max_n} with advanced optimization...", flush=True)
 
         for n in range(1, max_n + 1):
             # Use global restart for milestone n values
@@ -340,9 +341,13 @@ class AdvancedPackingSolver:
             else:
                 self.solve_single(n, verbose=verbose)
 
+            # Print progress every n to show it's working
+            if verbose and n % 10 == 0:
+                sys.stdout.flush()
+
         if verbose:
             score = self.compute_total_score()
-            print(f"\nTotal score estimate: {score:.2f}")
+            print(f"\nTotal score estimate: {score:.2f}", flush=True)
 
         return self.solutions
 
