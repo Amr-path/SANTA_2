@@ -354,6 +354,7 @@ class AdvancedPackingSolver:
 
 # Backward compatibility aliases
 PackingSolver = AdvancedPackingSolver
+create_spiral_placement = create_spiral_compact
 
 
 def create_initial_solution(n: int, strategy: str = "optimal") -> Solution:
