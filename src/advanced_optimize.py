@@ -807,6 +807,7 @@ def create_hexagonal_interlocking(n: int) -> List[Tuple]:
     """
     Create initial placement using hexagonal interlocking pattern.
     Trees alternate orientation to interlock efficiently.
+    Validates no overlaps during placement.
     """
     if n == 0:
         return []
@@ -814,11 +815,12 @@ def create_hexagonal_interlocking(n: int) -> List[Tuple]:
         return [(0.0, 0.0, 0.0)]
 
     placements = []
+    detector = CollisionDetector()
 
-    # Hexagonal packing parameters
+    # Hexagonal packing parameters - use safer spacing to avoid overlaps
     # Tree is ~0.5 wide, ~1.0 tall
-    dx = 0.45  # Horizontal spacing
-    dy = 0.42  # Vertical spacing (tighter due to interlocking)
+    dx = 0.52  # Horizontal spacing (increased for safety)
+    dy = 0.48  # Vertical spacing (increased for safety)
 
     # Calculate grid dimensions
     cols = int(math.ceil(math.sqrt(n * 1.2)))  # Slightly wider than tall
@@ -841,19 +843,53 @@ def create_hexagonal_interlocking(n: int) -> List[Tuple]:
             else:
                 deg = 180.0 if col % 2 == 0 else 0.0
 
-            placements.append((x, y, deg))
-            idx += 1
+            # Validate no collision before adding
+            poly = transform_tree(x, y, deg)
+            if not detector.check_collision(poly):
+                placements.append((x, y, deg))
+                detector.add_polygon(poly)
+                idx += 1
+            else:
+                # Try alternative rotations
+                placed = False
+                for alt_deg in [90.0, 270.0, 45.0, 135.0, 225.0, 315.0]:
+                    poly = transform_tree(x, y, alt_deg)
+                    if not detector.check_collision(poly):
+                        placements.append((x, y, alt_deg))
+                        detector.add_polygon(poly)
+                        idx += 1
+                        placed = True
+                        break
+                if not placed:
+                    # Skip this position
+                    pass
             col += 1
 
         row += 1
 
-    return center_placements(placements)
+    # If we didn't place enough trees, add more at expanded positions
+    while len(placements) < n:
+        row += 1
+        x_offset = (row % 2) * (dx / 2)
+        for col in range(cols):
+            if len(placements) >= n:
+                break
+            x = col * dx + x_offset
+            y = row * dy
+            deg = 0.0 if (row + col) % 2 == 0 else 180.0
+            poly = transform_tree(x, y, deg)
+            if not detector.check_collision(poly):
+                placements.append((x, y, deg))
+                detector.add_polygon(poly)
+
+    return center_placements(placements[:n])
 
 
 def create_diamond_pattern(n: int) -> List[Tuple]:
     """
     Create initial placement using diamond/rhombic pattern.
     Good for minimizing bounding square.
+    Validates no overlaps during placement.
     """
     if n == 0:
         return []
@@ -861,50 +897,58 @@ def create_diamond_pattern(n: int) -> List[Tuple]:
         return [(0.0, 0.0, 0.0)]
 
     placements = []
+    detector = CollisionDetector()
 
-    # Diamond pattern parameters
-    spacing = 0.48
+    # Diamond pattern parameters - increased spacing for safety
+    spacing = 0.55
 
     # Build in a diamond shape from center outward
-    layers = int(math.ceil(math.sqrt(n)))
+    layers = int(math.ceil(math.sqrt(n))) + 2  # Extra layers for fallback
 
-    idx = 0
-    for layer in range(layers + 1):
-        if idx >= n:
+    # Place center tree first
+    poly = transform_tree(0.0, 0.0, 0.0)
+    placements.append((0.0, 0.0, 0.0))
+    detector.add_polygon(poly)
+
+    for layer in range(1, layers + 1):
+        if len(placements) >= n:
             break
 
-        if layer == 0:
-            placements.append((0.0, 0.0, 0.0))
-            idx += 1
-        else:
-            # Add pieces in a ring around center
-            for side in range(4):
-                for pos in range(layer):
-                    if idx >= n:
-                        break
+        # Add pieces in a ring around center
+        for side in range(4):
+            for pos in range(layer):
+                if len(placements) >= n:
+                    break
 
-                    # Calculate position on diamond edge
-                    if side == 0:
-                        x = (layer - pos) * spacing
-                        y = pos * spacing
-                    elif side == 1:
-                        x = -pos * spacing
-                        y = (layer - pos) * spacing
-                    elif side == 2:
-                        x = -(layer - pos) * spacing
-                        y = -pos * spacing
-                    else:
-                        x = pos * spacing
-                        y = -(layer - pos) * spacing
+                # Calculate position on diamond edge
+                if side == 0:
+                    x = (layer - pos) * spacing
+                    y = pos * spacing
+                elif side == 1:
+                    x = -pos * spacing
+                    y = (layer - pos) * spacing
+                elif side == 2:
+                    x = -(layer - pos) * spacing
+                    y = -pos * spacing
+                else:
+                    x = pos * spacing
+                    y = -(layer - pos) * spacing
 
-                    # Skip if already placed nearby
-                    if any(abs(p[0] - x) < spacing/2 and abs(p[1] - y) < spacing/2
-                           for p in placements):
-                        continue
+                deg = 180.0 if (len(placements) % 2 == 1) else 0.0
 
-                    deg = 180.0 if (idx % 2 == 1) else 0.0
+                # Validate no collision before adding
+                poly = transform_tree(x, y, deg)
+                if not detector.check_collision(poly):
                     placements.append((x, y, deg))
-                    idx += 1
+                    detector.add_polygon(poly)
+                else:
+                    # Try alternative rotations
+                    for alt_deg in [90.0, 270.0, 45.0, 135.0, 225.0, 315.0]:
+                        poly = transform_tree(x, y, alt_deg)
+                        if not detector.check_collision(poly):
+                            placements.append((x, y, alt_deg))
+                            detector.add_polygon(poly)
+                            break
 
     return center_placements(placements[:n])
 
@@ -913,6 +957,7 @@ def create_optimal_interlocking(n: int) -> List[Tuple]:
     """
     Create placement optimized for tree shape interlocking.
     Uses the tree geometry to find optimal arrangements.
+    Validates no overlaps during placement.
     """
     if n == 0:
         return []
@@ -920,45 +965,60 @@ def create_optimal_interlocking(n: int) -> List[Tuple]:
         return [(0.0, 0.0, 0.0)]
 
     placements = []
+    detector = CollisionDetector()
 
     # The tree shape: top triangle + trunk
     # Key insight: trees can nest when one is rotated 180 degrees
     # The trunk of one can fit between the branches of another
 
-    # Tight packing parameters
-    dx = 0.40  # Trees are 0.5 wide, slight overlap possible with rotation
-    dy = 0.45  # Vertical spacing
+    # Safe packing parameters
+    dx = 0.50  # Trees are 0.5 wide, increased for safety
+    dy = 0.50  # Vertical spacing increased
 
     # Use a brick pattern (offset rows)
     cols = int(math.ceil(math.sqrt(n * 1.1)))
 
     idx = 0
     row = 0
-    while idx < n:
+    max_rows = n + 5  # Safety limit
+
+    while len(placements) < n and row < max_rows:
         x_offset = (row % 2) * (dx * 0.5)
 
         col = 0
-        while idx < n and col < cols:
+        while len(placements) < n and col < cols:
             x = col * dx + x_offset
             y = row * dy
 
             # Interlocking rotation: alternate to allow nesting
             # Row 0: 0, 180, 0, 180, ...
             # Row 1: 180, 0, 180, 0, ...
-            base_rot = 0 if (row + col) % 2 == 0 else 180
+            base_rot = 0.0 if (row + col) % 2 == 0 else 180.0
 
-            placements.append((x, y, float(base_rot)))
-            idx += 1
+            # Validate no collision before adding
+            poly = transform_tree(x, y, base_rot)
+            if not detector.check_collision(poly):
+                placements.append((x, y, base_rot))
+                detector.add_polygon(poly)
+            else:
+                # Try alternative rotations
+                for alt_deg in [90.0, 270.0, 45.0, 135.0, 225.0, 315.0]:
+                    poly = transform_tree(x, y, alt_deg)
+                    if not detector.check_collision(poly):
+                        placements.append((x, y, alt_deg))
+                        detector.add_polygon(poly)
+                        break
             col += 1
 
         row += 1
 
-    return center_placements(placements)
+    return center_placements(placements[:n])
 
 
 def create_spiral_compact(n: int) -> List[Tuple]:
     """
     Compact spiral placement that maintains tight packing.
+    Uses collision detection to ensure no overlaps.
     """
     if n == 0:
         return []
@@ -966,47 +1026,134 @@ def create_spiral_compact(n: int) -> List[Tuple]:
         return [(0.0, 0.0, 0.0)]
 
     placements = [(0.0, 0.0, 0.0)]
+    detector = CollisionDetector()
+    detector.add_polygon(transform_tree(0.0, 0.0, 0.0))
 
     # Archimedean spiral with tight spacing
     a = 0.0  # Start at center
-    b = 0.12  # Spiral growth rate (tighter)
+    b = 0.15  # Spiral growth rate (slightly larger for safety)
 
     angle = 0.0
-    angle_step = 0.8  # Radians between placements
+    angle_step = 0.6  # Radians between placements
 
     for i in range(1, n):
-        # Find valid position along spiral
-        for _ in range(100):  # Try up to 100 times
+        placed = False
+        # Try multiple positions along spiral
+        for attempt in range(200):  # More attempts for safety
             angle += angle_step
             r = a + b * angle
             x = r * math.cos(angle)
             y = r * math.sin(angle)
 
-            # Rotation for interlocking
-            deg = 0.0 if i % 2 == 0 else 180.0
-
-            # Check if valid (no collision with existing)
-            poly = transform_tree(x, y, deg)
-            valid = True
-            for px, py, pd in placements:
-                if check_overlap(poly, transform_tree(px, py, pd)):
-                    valid = False
+            # Try multiple rotations
+            for deg in [0.0, 180.0, 90.0, 270.0, 45.0, 135.0, 225.0, 315.0]:
+                poly = transform_tree(x, y, deg)
+                if not detector.check_collision(poly):
+                    placements.append((x, y, deg))
+                    detector.add_polygon(poly)
+                    placed = True
                     break
 
-            if valid:
-                placements.append((x, y, deg))
+            if placed:
                 break
 
             # Increase angle step if collision
-            angle_step *= 1.02
-        else:
-            # Fallback: place at larger radius
+            angle_step *= 1.01
+
+        if not placed:
+            # Fallback: place at larger radius using grid search
             r = max(r * 1.5, 2.0)
-            x = r * math.cos(angle)
-            y = r * math.sin(angle)
-            placements.append((x, y, 0.0))
+            for angle_offset in np.linspace(0, 2 * math.pi, 24, endpoint=False):
+                x = r * math.cos(angle + angle_offset)
+                y = r * math.sin(angle + angle_offset)
+                for deg in [0.0, 180.0, 90.0, 270.0]:
+                    poly = transform_tree(x, y, deg)
+                    if not detector.check_collision(poly):
+                        placements.append((x, y, deg))
+                        detector.add_polygon(poly)
+                        placed = True
+                        break
+                if placed:
+                    break
+
+            if not placed:
+                # Ultimate fallback - place far away
+                x = r * 2 * math.cos(angle)
+                y = r * 2 * math.sin(angle)
+                placements.append((x, y, 0.0))
+                detector.add_polygon(transform_tree(x, y, 0.0))
 
     return center_placements(placements)
+
+
+def create_tight_grid_placement(n: int) -> List[Tuple]:
+    """
+    Create a tight grid placement using binary search to find minimum spacing.
+    This finds the tightest possible grid arrangement without overlaps.
+    """
+    if n == 0:
+        return []
+    if n == 1:
+        return [(0.0, 0.0, 0.0)]
+
+    def try_spacing(dx: float, dy: float) -> List[Tuple]:
+        """Try to place n trees with given spacing."""
+        placements = []
+        detector = CollisionDetector()
+
+        cols = int(math.ceil(math.sqrt(n * 1.1)))
+
+        row = 0
+        while len(placements) < n:
+            x_offset = (row % 2) * (dx * 0.5)
+
+            for col in range(cols):
+                if len(placements) >= n:
+                    break
+
+                x = col * dx + x_offset
+                y = row * dy
+
+                # Try interlocking rotations
+                deg = 0.0 if (row + col) % 2 == 0 else 180.0
+
+                poly = transform_tree(x, y, deg)
+                if not detector.check_collision(poly):
+                    placements.append((x, y, deg))
+                    detector.add_polygon(poly)
+
+            row += 1
+            if row > n:  # Safety limit
+                break
+
+        return placements if len(placements) == n else []
+
+    # Binary search for optimal horizontal spacing
+    dx_low, dx_high = 0.35, 0.60
+    dy = 0.50
+
+    best_placements = None
+    best_score = float('inf')
+
+    # Try different dy values
+    for dy in [0.45, 0.48, 0.50, 0.52]:
+        # Binary search for dx
+        dx_low, dx_high = 0.35, 0.60
+
+        for _ in range(10):  # 10 iterations of binary search
+            dx_mid = (dx_low + dx_high) / 2
+            placements = try_spacing(dx_mid, dy)
+
+            if placements:
+                score = compute_bounding_square_side(center_placements(placements))
+                if score < best_score:
+                    best_score = score
+                    best_placements = placements
+                dx_high = dx_mid  # Try tighter
+            else:
+                dx_low = dx_mid  # Need looser
+
+    return center_placements(best_placements) if best_placements else create_hexagonal_interlocking(n)
 
 
 def find_best_initial_placement(n: int) -> List[Tuple]:
@@ -1017,6 +1164,7 @@ def find_best_initial_placement(n: int) -> List[Tuple]:
         return [(0.0, 0.0, 0.0)] if n == 1 else []
 
     strategies = [
+        create_tight_grid_placement,
         create_hexagonal_interlocking,
         create_diamond_pattern,
         create_optimal_interlocking,

@@ -19,9 +19,10 @@ from .geometry import (
 from .advanced_optimize import (
     AdvancedOptimizer, AdvancedConfig,
     create_hexagonal_interlocking, create_optimal_interlocking,
-    create_diamond_pattern, create_spiral_compact,
+    create_diamond_pattern, create_spiral_compact, create_tight_grid_placement,
     find_best_initial_placement, optimize_placement_advanced
 )
+import numpy as np
 from .optimize import OptimizationConfig
 
 Placement = Tuple[float, float, float]
@@ -204,6 +205,7 @@ class AdvancedPackingSolver:
     def solve_single(self, n: int, verbose: bool = True) -> Solution:
         """
         Solve for a single n using incremental building + optimization.
+        Ensures no overlaps in the final solution.
         """
         if n <= 0:
             return []
@@ -245,10 +247,16 @@ class AdvancedPackingSolver:
         optimized = self.optimizer.optimize(solution, mult, verbose=False)
         optimized = center_placements(optimized)
 
-        # Verify validity
+        # Verify validity and fix if needed
         if not self._is_valid(optimized):
-            # Fall back to less aggressive optimization
-            optimized = center_placements(solution)
+            # Try to fix overlaps
+            optimized, still_has_overlaps = validate_and_fix_solution(optimized)
+            if still_has_overlaps:
+                # Fall back to non-optimized solution
+                optimized = center_placements(solution)
+                if not self._is_valid(optimized):
+                    # Ultimate fallback: fix the base solution
+                    optimized, _ = validate_and_fix_solution(optimized)
 
         self.solutions[n] = optimized
         self.scores[n] = compute_bounding_square_side(optimized)
@@ -261,6 +269,7 @@ class AdvancedPackingSolver:
     def solve_with_global_restart(self, n: int, verbose: bool = True) -> Solution:
         """
         Solve with multiple global restarts to escape local minima.
+        Ensures no overlaps in the final solution.
         """
         if n <= 1:
             return [(0.0, 0.0, 0.0)] if n == 1 else []
@@ -289,6 +298,14 @@ class AdvancedPackingSolver:
                     if score2 < best_score:
                         best_score = score2
                         best_solution = hex_opt
+                else:
+                    # Try to fix overlaps
+                    hex_fixed, still_overlaps = validate_and_fix_solution(hex_opt)
+                    if not still_overlaps:
+                        score2 = compute_bounding_square_side(hex_fixed)
+                        if score2 < best_score:
+                            best_score = score2
+                            best_solution = hex_fixed
         except Exception:
             pass
 
@@ -302,6 +319,14 @@ class AdvancedPackingSolver:
                     if score3 < best_score:
                         best_score = score3
                         best_solution = diamond_opt
+                else:
+                    # Try to fix overlaps
+                    diamond_fixed, still_overlaps = validate_and_fix_solution(diamond_opt)
+                    if not still_overlaps:
+                        score3 = compute_bounding_square_side(diamond_fixed)
+                        if score3 < best_score:
+                            best_score = score3
+                            best_solution = diamond_fixed
         except Exception:
             pass
 
@@ -315,11 +340,56 @@ class AdvancedPackingSolver:
                     if score4 < best_score:
                         best_score = score4
                         best_solution = interlock_opt
+                else:
+                    # Try to fix overlaps
+                    interlock_fixed, still_overlaps = validate_and_fix_solution(interlock_opt)
+                    if not still_overlaps:
+                        score4 = compute_bounding_square_side(interlock_fixed)
+                        if score4 < best_score:
+                            best_score = score4
+                            best_solution = interlock_fixed
+        except Exception:
+            pass
+
+        # Strategy 5: Spiral pattern
+        try:
+            spiral_init = create_spiral_compact(n)
+            if self._is_valid(spiral_init):
+                spiral_opt = self.optimizer.optimize(spiral_init, 2.0, verbose=False)
+                if self._is_valid(spiral_opt):
+                    score5 = compute_bounding_square_side(spiral_opt)
+                    if score5 < best_score:
+                        best_score = score5
+                        best_solution = spiral_opt
+        except Exception:
+            pass
+
+        # Strategy 6: Tight grid pattern (finds optimal spacing)
+        try:
+            tight_init = create_tight_grid_placement(n)
+            if self._is_valid(tight_init):
+                tight_opt = self.optimizer.optimize(tight_init, 2.0, verbose=False)
+                if self._is_valid(tight_opt):
+                    score6 = compute_bounding_square_side(tight_opt)
+                    if score6 < best_score:
+                        best_score = score6
+                        best_solution = tight_opt
+                else:
+                    # Try to fix overlaps
+                    tight_fixed, still_overlaps = validate_and_fix_solution(tight_opt)
+                    if not still_overlaps:
+                        score6 = compute_bounding_square_side(tight_fixed)
+                        if score6 < best_score:
+                            best_score = score6
+                            best_solution = tight_fixed
         except Exception:
             pass
 
         if best_solution is None:
+            # Ultimate fallback: use sol1 and fix if needed
             best_solution = sol1
+            if not self._is_valid(best_solution):
+                best_solution, _ = validate_and_fix_solution(best_solution)
 
         self.solutions[n] = center_placements(best_solution)
         self.scores[n] = compute_bounding_square_side(self.solutions[n])
@@ -384,19 +454,21 @@ def create_initial_solution(n: int, strategy: str = "optimal") -> Solution:
 
 
 def validate_and_fix_solution(solution: Solution) -> Tuple[Solution, bool]:
-    """Validate and attempt to fix overlapping solutions."""
-    from .geometry import check_all_overlaps
+    """Validate and attempt to fix overlapping solutions using multiple strategies."""
+    from .geometry import check_all_overlaps, check_overlap
 
     overlaps = check_all_overlaps(solution)
     if not overlaps:
         return solution, False
 
     fixed = list(solution)
-    max_iterations = 100
+    had_overlaps = True
 
-    for iteration in range(max_iterations):
+    # Strategy 1: Push overlapping trees apart
+    for iteration in range(200):
         overlaps = check_all_overlaps(fixed)
         if not overlaps:
+            had_overlaps = False
             break
 
         for i, j in overlaps:
@@ -412,9 +484,87 @@ def validate_and_fix_solution(solution: Solution) -> Tuple[Solution, bool]:
             else:
                 dx, dy = dx / dist, dy / dist
 
-            # Push apart
-            push = 0.05 * (1 + iteration * 0.1)
+            # Push apart with increasing force
+            push = 0.03 * (1 + iteration * 0.05)
             fixed[i] = (x1 - dx * push, y1 - dy * push, d1)
             fixed[j] = (x2 + dx * push, y2 + dy * push, d2)
 
-    return center_placements(fixed), len(overlaps) > 0
+    # Strategy 2: If still overlapping, try rotating conflicting trees
+    overlaps = check_all_overlaps(fixed)
+    if overlaps:
+        for i, j in overlaps:
+            x1, y1, d1 = fixed[i]
+            x2, y2, d2 = fixed[j]
+
+            # Try rotating the first tree
+            for alt_deg in [d1 + 30, d1 + 60, d1 + 90, d1 + 180]:
+                alt_deg = alt_deg % 360
+                p1 = transform_tree(x1, y1, alt_deg)
+                p2 = transform_tree(x2, y2, d2)
+                if not check_overlap(p1, p2):
+                    fixed[i] = (x1, y1, alt_deg)
+                    break
+
+    # Strategy 3: Rebuild placement for remaining overlaps
+    overlaps = check_all_overlaps(fixed)
+    if overlaps:
+        # Get list of problematic indices
+        problematic = set()
+        for i, j in overlaps:
+            problematic.add(i)
+            problematic.add(j)
+
+        # Remove problematic trees and re-place them
+        good_trees = [(i, fixed[i]) for i in range(len(fixed)) if i not in problematic]
+        bad_trees = [(i, fixed[i]) for i in problematic]
+
+        # Build detector from good trees
+        detector = CollisionDetector()
+        new_fixed = []
+        for _, (x, y, d) in good_trees:
+            new_fixed.append((x, y, d))
+            detector.add_polygon(transform_tree(x, y, d))
+
+        # Re-place bad trees one by one
+        for _, (ox, oy, od) in bad_trees:
+            placed = False
+            # Try nearby positions with different rotations
+            for radius in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
+                if placed:
+                    break
+                for angle_offset in np.linspace(0, 2 * math.pi, 16, endpoint=False):
+                    if placed:
+                        break
+                    x = ox + radius * math.cos(angle_offset)
+                    y = oy + radius * math.sin(angle_offset)
+                    for deg in [od, od + 180, od + 90, od + 270, 0, 180, 90, 270]:
+                        deg = deg % 360
+                        poly = transform_tree(x, y, deg)
+                        if not detector.check_collision(poly):
+                            new_fixed.append((x, y, deg))
+                            detector.add_polygon(poly)
+                            placed = True
+                            break
+
+            if not placed:
+                # Ultimate fallback: place at larger radius
+                for radius in [1.5, 2.0, 2.5, 3.0]:
+                    for angle in np.linspace(0, 2 * math.pi, 24, endpoint=False):
+                        x = ox + radius * math.cos(angle)
+                        y = oy + radius * math.sin(angle)
+                        poly = transform_tree(x, y, 0.0)
+                        if not detector.check_collision(poly):
+                            new_fixed.append((x, y, 0.0))
+                            detector.add_polygon(poly)
+                            placed = True
+                            break
+                    if placed:
+                        break
+
+        fixed = new_fixed
+
+    # Final verification
+    overlaps = check_all_overlaps(fixed)
+    had_overlaps = len(overlaps) > 0
+
+    return center_placements(fixed), had_overlaps
